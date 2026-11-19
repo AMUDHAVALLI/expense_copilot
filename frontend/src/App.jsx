@@ -14,9 +14,13 @@ export default function App() {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      text: "👋 **Welcome to Expense Copilot!**\n\nI am your autonomous financial assistant connected to your live cloud ledger. Here is what I can do for you:\n\n1. 🛒 **Track Multiple Expenses**: *'Milk 45, Vegetables 120 and Bread 35'*\n2. 🔍 **Precise Category Calculations**: *'Calculate today dairy amount'* (Strictly filters and sums Dairy items without hallucination)\n3. 📅 **Future Planning & Commitments**: *'Plan ₹4500 for Bike Insurance on Dec 15'*\n4. 📊 **Interactive Visual Analytics**: *'Show pie chart of expenses'* or *'Show bar chart of commitments'*",
+      text: "👋 **Welcome to Expense Copilot!**\n\nI am your autonomous financial assistant connected to your live cloud ledger. Here is what I can do for you:\n\n1. 🛒 **Track Multiple Expenses**: *'Milk 45, Vegetables 120 and Bread 35'*\n2. 🔍 **Precise Category Calculations**: *'Calculate today dairy amount'* (Strictly filters and sums Dairy items without hallucination)\n3. 🔮 **Predictive Forecasting**: *'Predict my next month expenses'* (Forecasts monthly burn rate, commitments, and visual budget projections)\n4. 📅 **Future Planning & Commitments**: *'Plan ₹4500 for Bike Insurance on Dec 15'*\n5. 📊 **Interactive Visual Analytics**: *'Show pie chart of expenses'* or *'Show bar chart of commitments'*",
       chart: null,
       suggestions: [
+        {
+          question: "Predict my next month expenses",
+          tooltip: "AI forecast based on recurring run-rate, variable spend & scheduled commitments"
+        },
         {
           question: "Calculate today dairy amount",
           tooltip: "Queries only Dairy records from your ledger without hallucination"
@@ -147,6 +151,7 @@ export default function App() {
 
   // Interactive Quick Action Category Chips
   const quickActions = [
+    { label: "🔮 Predict Next Month", query: "Predict my next month expenses", tip: "Forecast future spending & run-rate" },
     { label: "🥛 Dairy", query: "Calculate today dairy amount", tip: "Query Dairy total" },
     { label: "🥦 Groceries", query: "How much spent on vegetables and groceries today?", tip: "Query Groceries total" },
     { label: "🍔 Food & Dining", query: "How much did I spend on food today?", tip: "Query Dining total" },

@@ -56,11 +56,14 @@ IMPORTANT RULES FOR ADDING EXPENSES:
    - If user says 'yesterday', set expense_date to yesterday.
    - Otherwise default to today's date.
 3. Chart Rule:
-   - "wants_chart": true ONLY if the user explicitly used words like 'chart', 'graph', 'pie', 'bar', 'plot', 'visualize'. Otherwise false.
+   - "wants_chart": true ONLY if the user explicitly used words like 'chart', 'graph', 'pie', 'bar', 'plot', 'visualize', OR if asking for "PREDICT_EXPENSES" (forecasting always benefits from a chart).
+4. Prediction Rule:
+   - If user asks to predict, forecast, project future expenses (e.g. 'Predict my next month expense', 'forecast my spend', 'predict future expenses'):
+     Set "intent": "PREDICT_EXPENSES", "wants_chart": true, "recommended_chart": "bar".
 
 Respond strictly in valid JSON matching this schema:
 {{
-  "intent": "ADD_TODAY_EXPENSE" | "ADD_FUTURE_EXPENSE" | "QUERY_EXPENSES" | "GENERAL",
+  "intent": "ADD_TODAY_EXPENSE" | "ADD_FUTURE_EXPENSE" | "QUERY_EXPENSES" | "PREDICT_EXPENSES" | "GENERAL",
   "expense_date": "YYYY-MM-DD" | null,
   "items": [
     {{"item": "Milk", "category": "Dairy", "amount": 500.0}},
@@ -200,6 +203,20 @@ def heuristic_fallback_parse(user_message: str) -> Dict[str, Any]:
     msg = user_message.strip()
     msg_lower = msg.lower()
     wants_chart = user_explicitly_wants_chart(msg)
+
+    # 0. Future Prediction & Forecasting Intent
+    prediction_keywords = ["predict", "prediction", "forecast", "forecasting", "projected", "projection", "future spend", "future prediction", "run rate", "burn rate", "estimate next month", "next month expense"]
+    if any(k in msg_lower for k in prediction_keywords):
+        target_cat, target_itm = extract_target_filter(msg)
+        chart_type = "line" if ("line" in msg_lower or "trend" in msg_lower) else ("pie" if "pie" in msg_lower else "bar")
+        return {
+            "intent": "PREDICT_EXPENSES",
+            "target_category": target_cat,
+            "target_item": target_itm,
+            "wants_chart": True,
+            "recommended_chart": chart_type,
+            "reply_text": ""
+        }
 
     # 1. Future Expense Intent
     future_keywords = ["plan", "future", "next month", "upcoming", "scheduled", "will spend", "planning"]
@@ -503,15 +520,134 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
             else:
                 reply = "No expense data recorded yet. Start by entering your expenses!"
 
+    # -------------------------------------------------------------
+    # 4. PREDICT & FORECAST EXPENSES (Run-Rate & Machine Forecasting)
+    # -------------------------------------------------------------
+    elif intent == "PREDICT_EXPENSES":
+        all_expenses = db.query(models.Expense).all()
+        planned_futs = db.query(models.FutureExpense).filter(models.FutureExpense.status == "PLANNED").all()
+
+        if not all_expenses and not planned_futs:
+            reply = "🔮 **Predictive Forecasting**: No historical expenses or scheduled commitments found yet to project from. Add a few expenses (e.g. *'Milk 45, Groceries 1200'*) or commitments to generate a forecast!"
+            chart_payload = None
+        elif target_category or target_item:
+            # Specific category forecast
+            conditions = []
+            if target_category:
+                conditions.append(models.Expense.category.ilike(f"%{target_category}%"))
+                conditions.append(models.Expense.item.ilike(f"%{target_category}%"))
+            if target_item:
+                conditions.append(models.Expense.item.ilike(f"%{target_item}%"))
+            
+            cat_records = db.query(models.Expense).filter(or_(*conditions)).all()
+            cat_label = target_category or (target_item.title() if target_item else "Selected Category")
+
+            if not cat_records:
+                reply = f"🔮 **Forecast for {cat_label}**: No past recorded transactions found in **{cat_label}** to project future spending."
+                chart_payload = None
+            else:
+                total_cat_spent = sum(r.amount for r in cat_records)
+                dates_count = len(set(r.expense_date for r in cat_records)) or 1
+                daily_avg = total_cat_spent / dates_count
+
+                is_fixed_monthly = any(c in cat_label.lower() for c in ['loan', 'emi', 'school', 'fee', 'rent', 'bill', 'insurance'])
+                if is_fixed_monthly:
+                    projected_30d = total_cat_spent
+                    run_rate_label = f"₹{projected_30d:.2f} per monthly cycle"
+                else:
+                    projected_30d = daily_avg * 30
+                    run_rate_label = f"₹{daily_avg:.2f}/day (based on {dates_count} active tracking day(s))"
+
+                week1 = round(projected_30d * 0.25, 2)
+                week2 = round(projected_30d * 0.50, 2)
+                week3 = round(projected_30d * 0.75, 2)
+                week4 = round(projected_30d, 2)
+
+                reply = (
+                    f"🔮 **AI Expense Forecast for {cat_label}**:\n\n"
+                    f"• **Current Recorded Spend**: ₹{total_cat_spent:.2f}\n"
+                    f"• **Estimated Run-Rate**: {run_rate_label}\n"
+                    f"• **Projected 30-Day Expense**: **₹{projected_30d:.2f}**\n\n"
+                    f"💡 **Predictive Insight**: At this baseline velocity, you are projected to spend approximately **₹{projected_30d:.2f}** on {cat_label} over the next 30 days."
+                )
+
+                chart_payload = {
+                    "type": "line" if data.get("recommended_chart") == "line" else "bar",
+                    "title": f"Projected 4-Week Cumulative Spend: {cat_label} (₹)",
+                    "data": [
+                        {"name": "Week 1", "value": week1},
+                        {"name": "Week 2", "value": week2},
+                        {"name": "Week 3", "value": week3},
+                        {"name": "Week 4 (End)", "value": week4}
+                    ]
+                }
+        else:
+            # Comprehensive Next-Month Financial Forecast
+            cat_totals = {}
+            for e in all_expenses:
+                cat_totals[e.category] = cat_totals.get(e.category, 0.0) + e.amount
+
+            fixed_categories = {"Loans & EMI", "Education & Fees", "Bills & Utilities", "Rent"}
+            projected_by_cat = {}
+            total_fixed = 0.0
+            total_variable = 0.0
+
+            for cat, amt in cat_totals.items():
+                if cat in fixed_categories or "loan" in cat.lower() or "fee" in cat.lower():
+                    proj = amt
+                    total_fixed += proj
+                    projected_by_cat[cat] = proj
+                else:
+                    if amt > 2000:
+                        proj = amt
+                    else:
+                        proj = amt * 10 if amt > 200 else amt * 30
+                    total_variable += proj
+                    projected_by_cat[cat] = proj
+
+            total_planned_futs = sum(f.expected_amount for f in planned_futs)
+            if total_planned_futs > 0:
+                projected_by_cat["Scheduled Commitments"] = total_planned_futs
+                total_fixed += total_planned_futs
+
+            total_projected_next_month = sum(projected_by_cat.values())
+            fixed_pct = (total_fixed / total_projected_next_month * 100) if total_projected_next_month > 0 else 0
+            variable_pct = 100 - fixed_pct
+
+            sorted_cats = sorted(projected_by_cat.items(), key=lambda x: x[1], reverse=True)
+            top_driver_name, top_driver_amt = sorted_cats[0] if sorted_cats else ("Expenses", 0)
+            top_driver_pct = (top_driver_amt / total_projected_next_month * 100) if total_projected_next_month > 0 else 0
+
+            breakdown_lines = "\n".join([f"• **{k}**: ₹{v:,.2f}" for k, v in sorted_cats])
+
+            reply = (
+                f"🔮 **Next Month Financial Forecast & Expense Prediction**:\n\n"
+                f"Based on your recurring ledger patterns and planned commitments, here is your projected spending for next month:\n\n"
+                f"{breakdown_lines}\n\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"👉 **Total Projected Spend**: **₹{total_projected_next_month:,.2f}**\n\n"
+                f"📊 **Financial Burn-Rate Analysis**:\n"
+                f"• **Fixed Commitments (Loans, Fees, Scheduled Bills)**: ₹{total_fixed:,.2f} ({fixed_pct:.0f}%)\n"
+                f"• **Flexible Daily Essentials (Dairy, Groceries, Dining)**: ₹{total_variable:,.2f} ({variable_pct:.0f}%)\n"
+                f"• **Primary Cost Driver**: **{top_driver_name}** represents **{top_driver_pct:.0f}%** of your projected outflow.\n\n"
+                f"💡 **Autonomous Advisory**: To optimize your savings next month, focusing on discretionary daily spending can preserve up to **15-20%** of your flexible budget."
+            )
+
+            chart_payload = {
+                "type": data.get("recommended_chart") or "bar",
+                "title": f"Projected Next Month Budget Allocation (Total: ₹{total_projected_next_month:,.0f})",
+                "data": [{"name": k, "value": round(float(v), 2)} for k, v in sorted_cats]
+            }
+
     else:
         reply = data.get("reply_text") or "I can help you track and calculate your expenses!"
 
     # Smart Suggested Questions
     suggestions = [
+        {"question": "Predict my next month expenses", "tooltip": "AI forecast based on recurring run-rate & commitments"},
         {"question": "Calculate today dairy amount", "tooltip": "Calculates strictly Dairy records"},
         {"question": "What did I spend today?", "tooltip": "Shows today's total spending"},
-        {"question": "Show pie chart of expenses", "tooltip": "Requests visual chart of all categories"},
-        {"question": "Show future planned expenses", "tooltip": "Lists upcoming scheduled commitments"}
+        {"question": "Show pie chart of expenses", "tooltip": "Requests visual chart of all categories"}
     ]
 
     return {
