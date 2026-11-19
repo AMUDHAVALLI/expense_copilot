@@ -3,7 +3,7 @@ import {
   Send, Bot, User, Loader2, Sparkles, 
   Calendar, TrendingUp, CheckCircle2, 
   ShoppingBag, ArrowDownCircle, PieChart as ChartIcon,
-  Wallet, Landmark
+  Wallet, Landmark, Brain
 } from 'lucide-react';
 import DynamicChart from './components/DynamicChart';
 import TooltipPicker from './components/TooltipPicker';
@@ -14,9 +14,17 @@ export default function App() {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      text: "👋 **Welcome to Expense Copilot!**\n\nI am your autonomous financial assistant connected to your live cloud ledger. Here is what I can do for you:\n\n1. 🛒 **Track Multiple Expenses**: *'Milk 45, Vegetables 120 and Bread 35'*\n2. 🔍 **Precise Category Calculations**: *'Calculate today dairy amount'* (Strictly filters and sums Dairy items without hallucination)\n3. 🔮 **Predictive Forecasting**: *'Predict my next month expenses'* (Forecasts monthly burn rate, commitments, and visual budget projections)\n4. 📅 **Future Planning & Commitments**: *'Plan ₹4500 for Bike Insurance on Dec 15'*\n5. 📊 **Interactive Visual Analytics**: *'Show pie chart of expenses'* or *'Show bar chart of commitments'*",
+      text: "👋 **Welcome to Expense Copilot!**\n\nI am your autonomous financial assistant connected to your live cloud ledger. Here is what I can do for you:\n\n1. 🛒 **Track Multiple Expenses**: *'Milk 45, Vegetables 120 and Bread 35'*\n2. 🔍 **Precise Category Calculations**: *'Calculate today dairy amount'* (Strictly filters and sums Dairy items without hallucination)\n3. 🔮 **Predictive Forecasting**: *'Predict my next month expenses'* (Forecasts monthly burn rate, commitments, and visual budget projections)\n4. 🧠 **Financial Memory & Profile**: *'Remember that my grocery budget is ₹8,000 per month'* or *'What do you remember about my finances?'*\n5. 📅 **Future Planning & Commitments**: *'Plan ₹4500 for Bike Insurance on Dec 15'*\n6. 📊 **Interactive Visual Analytics**: *'Show pie chart of expenses'* or *'Show bar chart of commitments'*",
       chart: null,
       suggestions: [
+        {
+          question: "What do you remember about my finances?",
+          tooltip: "Inspect remembered financial profile, budgets & preferences"
+        },
+        {
+          question: "Remember that my grocery budget is ₹8,000 per month",
+          tooltip: "Store a permanent budget constraint in your cloud ledger"
+        },
         {
           question: "Predict my next month expenses",
           tooltip: "AI forecast based on recurring run-rate, variable spend & scheduled commitments"
@@ -28,14 +36,6 @@ export default function App() {
         {
           question: "Show pie chart of my expenses",
           tooltip: "Renders on-demand interactive visualization (Pie, Bar, Line)"
-        },
-        {
-          question: "What did I spend today?",
-          tooltip: "Aggregates all recorded spending for today"
-        },
-        {
-          question: "Show future planned expenses",
-          tooltip: "Lists upcoming scheduled commitments"
         }
       ]
     }
@@ -46,7 +46,8 @@ export default function App() {
   const [stats, setStats] = useState({
     today_total: 0,
     future_total: 0,
-    total_records: 0
+    total_records: 0,
+    memories_count: 0
   });
   const chatBottomRef = useRef(null);
 
@@ -82,10 +83,15 @@ export default function App() {
     setLoading(true);
 
     try {
+      const historyPayload = newMessages.slice(-6).map(m => ({
+        role: m.role,
+        text: m.text
+      }));
+
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message })
+        body: JSON.stringify({ message, history: historyPayload })
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -151,6 +157,8 @@ export default function App() {
 
   // Interactive Quick Action Category Chips
   const quickActions = [
+    { label: "🧠 Profile & Memories", query: "What do you remember about my finances?", tip: "View remembered financial profile & budgets" },
+    { label: "🎯 Set Grocery Budget", query: "Remember that my grocery budget is ₹8000 per month", tip: "Store monthly grocery budget" },
     { label: "🔮 Predict Next Month", query: "Predict my next month expenses", tip: "Forecast future spending & run-rate" },
     { label: "🥛 Dairy", query: "Calculate today dairy amount", tip: "Query Dairy total" },
     { label: "🥦 Groceries", query: "How much spent on vegetables and groceries today?", tip: "Query Groceries total" },
@@ -202,6 +210,19 @@ export default function App() {
                   ₹{stats.future_total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </strong>
               </div>
+              <span className="text-slate-300">|</span>
+              <button
+                type="button"
+                onClick={() => handleSendMessage("What do you remember about my finances?")}
+                title="Click to view remembered financial profile & active memories"
+                className="flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer"
+              >
+                <Brain className="w-3.5 h-3.5 text-purple-600" />
+                <span className="text-slate-500 text-[11px]">Memories:</span>
+                <strong className="text-purple-700 font-bold">
+                  {stats.memories_count || 0}
+                </strong>
+              </button>
             </div>
           </div>
         </header>

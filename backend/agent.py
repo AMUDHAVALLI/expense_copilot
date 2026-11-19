@@ -60,16 +60,25 @@ IMPORTANT RULES FOR ADDING EXPENSES:
 4. Prediction Rule:
    - If user asks to predict, forecast, project future expenses (e.g. 'Predict my next month expense', 'forecast my spend', 'predict future expenses'):
      Set "intent": "PREDICT_EXPENSES", "wants_chart": true, "recommended_chart": "bar".
+5. Memory Rules:
+   - "REMEMBER": If user asks to remember a financial preference, budget, salary, or habit (e.g. "Remember that my grocery budget is ₹8000", "Remember salary is 65k", "Note that car EMI is on the 5th"):
+     Set "intent": "REMEMBER", and provide "memory": {{"topic": "Grocery Budget", "content": "Monthly grocery budget is ₹8000", "memory_type": "BUDGET"}}.
+   - "RECALL_MEMORY": If user asks what you remember (e.g. "What do you remember about my finances?", "Show my financial profile", "What is my grocery budget?"):
+     Set "intent": "RECALL_MEMORY".
+   - "FORGET_MEMORY": If user asks to forget or clear memories (e.g. "Forget my grocery budget", "Clear memories"):
+     Set "intent": "FORGET_MEMORY", "topic_target": "Grocery Budget" | "ALL".
 
 Respond strictly in valid JSON matching this schema:
 {{
-  "intent": "ADD_TODAY_EXPENSE" | "ADD_FUTURE_EXPENSE" | "QUERY_EXPENSES" | "PREDICT_EXPENSES" | "GENERAL",
+  "intent": "ADD_TODAY_EXPENSE" | "ADD_FUTURE_EXPENSE" | "QUERY_EXPENSES" | "PREDICT_EXPENSES" | "REMEMBER" | "RECALL_MEMORY" | "FORGET_MEMORY" | "GENERAL",
   "expense_date": "YYYY-MM-DD" | null,
   "items": [
     {{"item": "Milk", "category": "Dairy", "amount": 500.0}},
     {{"item": "Personal Loan", "category": "Loans & EMI", "amount": 20.0}}
   ],
   "future_item": {{"item": "Bike Service", "category": "Bills & Utilities", "expected_amount": 3500.0, "target_date": "YYYY-MM-DD"}},
+  "memory": {{"topic": "Grocery Budget", "content": "Monthly grocery budget is ₹8000", "memory_type": "BUDGET"}},
+  "topic_target": "Grocery Budget" | "ALL" | null,
   "time_filter": "TODAY" | "FUTURE" | "ALL_TIME",
   "target_category": "Dairy" | null,
   "target_item": "Milk" | null,
@@ -218,6 +227,62 @@ def heuristic_fallback_parse(user_message: str) -> Dict[str, Any]:
             "reply_text": ""
         }
 
+    # 0B. Memory Intents (Remember, Recall, Forget)
+    if any(k in msg_lower for k in ["forget", "delete memory", "clear memory", "remove memory", "reset memory"]):
+        topic_target = re.sub(r'\b(forget|delete|clear|remove|reset|my|all|memories|memory|about)\b', '', msg, flags=re.I).strip()
+        return {
+            "intent": "FORGET_MEMORY",
+            "topic_target": topic_target or "ALL",
+            "wants_chart": False,
+            "recommended_chart": None,
+            "reply_text": ""
+        }
+
+    recall_phrases = ["what do you remember", "show memories", "show memory", "my memory", "financial profile", "remembered budget", "do you remember", "what are my memories", "my preferences", "show remembered", "list memories"]
+    if any(k in msg_lower for k in recall_phrases):
+        return {
+            "intent": "RECALL_MEMORY",
+            "wants_chart": False,
+            "recommended_chart": None,
+            "reply_text": ""
+        }
+
+    remember_triggers = ["remember that", "remember my", "remember to", "remember i", "remember", "note that", "keep in mind that", "keep track that"]
+    starts_remember = any(msg_lower.startswith(t) for t in remember_triggers)
+    is_budget_preference = bool(re.search(r'\b(my\s+budget|my\s+salary|salary\s+is|budget\s+is)\b', msg_lower))
+
+    if starts_remember or is_budget_preference:
+        clean_content = re.sub(r'^(?:remember\s+(?:that\s+|my\s+|to\s+|i\s+)?|note\s+that\s+|keep\s+in\s+mind\s+that\s+|keep\s+track\s+that\s+)', '', msg, flags=re.I).strip()
+        topic = "General Financial Preference"
+        mem_type = "PREFERENCE"
+        if "budget" in msg_lower:
+            topic = "Monthly Budget"
+            mem_type = "BUDGET"
+            if "grocery" in msg_lower or "groceries" in msg_lower:
+                topic = "Grocery Budget"
+            elif "dairy" in msg_lower or "milk" in msg_lower:
+                topic = "Dairy Budget"
+            elif "dining" in msg_lower or "food" in msg_lower:
+                topic = "Dining Budget"
+        elif "salary" in msg_lower or "income" in msg_lower:
+            topic = "Monthly Salary"
+            mem_type = "INCOME"
+        elif any(k in msg_lower for k in ["emi", "loan", "rent", "bill", "due date"]):
+            topic = "Recurring Commitment"
+            mem_type = "RECURRING_BILL"
+
+        return {
+            "intent": "REMEMBER",
+            "memory": {
+                "topic": topic,
+                "content": clean_content or msg,
+                "memory_type": mem_type
+            },
+            "wants_chart": False,
+            "recommended_chart": None,
+            "reply_text": ""
+        }
+
     # 1. Future Expense Intent
     future_keywords = ["plan", "future", "next month", "upcoming", "scheduled", "will spend", "planning"]
     if any(k in msg_lower for k in future_keywords) and re.search(r'\d+', msg_lower) and not re.search(r'(spent|bought|paid)', msg_lower):
@@ -280,19 +345,26 @@ def heuristic_fallback_parse(user_message: str) -> Dict[str, Any]:
         "reply_text": "I can help you track and calculate your expenses! Try entering your expenses (e.g. 'Milk 45, Bread 35') or asking questions."
     }
 
-def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
+def process_chat(user_message: str, db: Session, history: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     data = None
 
     try:
         if not openai_client:
             raise ValueError("OpenAI client not configured")
+        
+        openai_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if history:
+            for h in history[-4:]:
+                r = h.get("role")
+                t = h.get("text") or h.get("content") or ""
+                if r in ["user", "assistant"] and t:
+                    openai_messages.append({"role": r, "content": t[:400]})
+        openai_messages.append({"role": "user", "content": user_message})
+
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message}
-            ],
+            messages=openai_messages,
             temperature=0.0
         )
         data = json.loads(response.choices[0].message.content)
@@ -312,6 +384,19 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
 
     target_category = data.get("target_category")
     target_item = data.get("target_item")
+
+    # Multi-turn Context Resolution (resolves "it", "that", "again" from conversational history)
+    if history and (not target_category and not target_item):
+        msg_l = user_message.lower()
+        is_contextual = any(k in msg_l for k in [" it", " that", " this", " those", "again", "for that", "show it", "show that"])
+        if is_contextual:
+            for past in reversed(history[-4:]):
+                past_text = past.get("text", "") or past.get("content", "") or ""
+                past_cat, past_item = extract_target_filter(past_text)
+                if past_cat or past_item:
+                    target_category = past_cat
+                    target_item = past_item
+                    break
     if not target_category:
         detected_cat, detected_item = extract_target_filter(user_message)
         if detected_cat:
@@ -461,6 +546,34 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
                     f"{item_rows}\n\n"
                     f"👉 **Total {category_label} Amount**: **₹{calculated_total:.2f}** (across {len(records)} record(s))."
                 )
+
+                # Check for remembered budget
+                matched_budget = db.query(models.UserMemory).filter(
+                    models.UserMemory.memory_type == "BUDGET",
+                    models.UserMemory.topic.ilike(f"%{category_label}%")
+                ).first()
+                if not matched_budget:
+                    for word in category_label.split():
+                        if len(word) > 3:
+                            matched_budget = db.query(models.UserMemory).filter(
+                                models.UserMemory.memory_type == "BUDGET",
+                                models.UserMemory.topic.ilike(f"%{word}%")
+                            ).first()
+                            if matched_budget:
+                                break
+
+                if matched_budget:
+                    budget_nums = re.findall(r'(\d+(?:\.\d+)?)', matched_budget.content)
+                    if budget_nums:
+                        b_limit = float(budget_nums[0])
+                        pct_used = (calculated_total / b_limit * 100) if b_limit > 0 else 0
+                        rem = max(0.0, b_limit - calculated_total)
+                        reply += (
+                            f"\n\n🎯 **Remembered Budget Tracker**:\n"
+                            f"• Target Budget: **₹{b_limit:,.2f}**\n"
+                            f"• Consumed: **{pct_used:.0f}%** (₹{calculated_total:,.2f})\n"
+                            f"• Remaining Available: **₹{rem:,.2f}**"
+                        )
 
                 if explicit_chart:
                     chart_payload = {
@@ -633,21 +746,123 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
                 f"💡 **Autonomous Advisory**: To optimize your savings next month, focusing on discretionary daily spending can preserve up to **15-20%** of your flexible budget."
             )
 
+            # Check remembered income/salary
+            salary_mem = db.query(models.UserMemory).filter(
+                models.UserMemory.memory_type == "INCOME"
+            ).first()
+            if salary_mem:
+                salary_nums = re.findall(r'(\d+(?:\.\d+)?)', salary_mem.content)
+                if salary_nums:
+                    salary_amt = float(salary_nums[0])
+                    projected_savings = salary_amt - total_projected_next_month
+                    savings_rate = (projected_savings / salary_amt * 100) if salary_amt > 0 else 0
+                    reply += (
+                        f"\n\n💰 **Income vs. Projected Outflow (from Remembered Salary)**:\n"
+                        f"• Monthly Income: **₹{salary_amt:,.2f}**\n"
+                        f"• Projected Monthly Savings: **₹{projected_savings:,.2f}** ({savings_rate:.0f}% savings rate)"
+                    )
+
             chart_payload = {
                 "type": data.get("recommended_chart") or "bar",
                 "title": f"Projected Next Month Budget Allocation (Total: ₹{total_projected_next_month:,.0f})",
                 "data": [{"name": k, "value": round(float(v), 2)} for k, v in sorted_cats]
             }
 
+    # -------------------------------------------------------------
+    # 5. REMEMBER (Persistent Financial Profile / Long-Term Memory)
+    # -------------------------------------------------------------
+    elif intent == "REMEMBER":
+        mem_data = data.get("memory", {})
+        topic = mem_data.get("topic") or "Financial Preference"
+        content = mem_data.get("content") or user_message
+        mem_type = mem_data.get("memory_type") or "PREFERENCE"
+
+        existing = db.query(models.UserMemory).filter(models.UserMemory.topic.ilike(f"%{topic}%")).first()
+        if existing:
+            existing.content = content
+            existing.memory_type = mem_type
+            existing.updated_at = datetime.utcnow()
+            action_verb = "Updated"
+        else:
+            new_mem = models.UserMemory(
+                topic=topic,
+                content=content,
+                memory_type=mem_type
+            )
+            db.add(new_mem)
+            action_verb = "Saved"
+        db.commit()
+
+        reply = (
+            f"🧠 **Memory {action_verb} in Your Financial Profile**:\n\n"
+            f"• **Topic**: **{topic}**\n"
+            f"• **Detail**: *\"{content}\"*\n"
+            f"• **Type**: `{mem_type}`\n\n"
+            f"💡 **Context Active**: I've saved this permanently in your cloud ledger. I will automatically reference it when calculating budgets, checking expense limits, and generating predictions."
+        )
+
+    # -------------------------------------------------------------
+    # 6. RECALL_MEMORY (Recall Saved Profile)
+    # -------------------------------------------------------------
+    elif intent == "RECALL_MEMORY":
+        memories = db.query(models.UserMemory).order_by(models.UserMemory.id.asc()).all()
+        if not memories:
+            reply = (
+                "🧠 **Financial Memory Profile**:\n\n"
+                "I haven't stored any personal financial preferences yet!\n\n"
+                "You can tell me things like:\n"
+                "• *'Remember that my monthly grocery budget is ₹8,000'*\n"
+                "• *'Remember my monthly salary is ₹65,000 credited on the 1st'*\n"
+                "• *'Remember my car loan EMI of ₹12,000 is due on the 5th'*\n"
+                "• *'Remember I prefer organic milk from Nandini'*"
+            )
+        else:
+            type_icons = {
+                "BUDGET": "🎯",
+                "INCOME": "💰",
+                "RECURRING_BILL": "📅",
+                "PREFERENCE": "⭐",
+                "GOAL": "🏆",
+                "NOTE": "📝"
+            }
+            mem_lines = []
+            for m in memories:
+                icon = type_icons.get(m.memory_type, "📌")
+                date_str = m.updated_at.strftime('%b %d') if m.updated_at else ""
+                mem_lines.append(f"• {icon} **{m.topic}**: {m.content} *(Saved {date_str})*")
+
+            reply = (
+                f"🧠 **Your Remembered Financial Profile** ({len(memories)} active memory item(s)):\n\n"
+                + "\n".join(mem_lines)
+                + "\n\n💡 *I actively reference these memories when analyzing your spending burn-rates and projecting next-month budgets.*"
+            )
+
+    # -------------------------------------------------------------
+    # 7. FORGET_MEMORY (Clear or Remove Memory)
+    # -------------------------------------------------------------
+    elif intent == "FORGET_MEMORY":
+        topic_target = data.get("topic_target", "")
+        if not topic_target or "all" in topic_target.lower():
+            count = db.query(models.UserMemory).delete()
+            db.commit()
+            reply = f"🧠 **Memories Cleared**: Successfully wiped {count} remembered item(s) from your financial profile."
+        else:
+            deleted = db.query(models.UserMemory).filter(models.UserMemory.topic.ilike(f"%{topic_target}%")).delete()
+            db.commit()
+            if deleted:
+                reply = f"🧠 **Memory Removed**: Forgot all notes related to **{topic_target}**."
+            else:
+                reply = f"🧠 No saved memory matching **'{topic_target}'** was found in your profile."
+
     else:
         reply = data.get("reply_text") or "I can help you track and calculate your expenses!"
 
     # Smart Suggested Questions
     suggestions = [
+        {"question": "What do you remember about my finances?", "tooltip": "Inspect active memories & financial profile"},
+        {"question": "Remember that my grocery budget is ₹8,000 per month", "tooltip": "Store long-term budget constraint"},
         {"question": "Predict my next month expenses", "tooltip": "AI forecast based on recurring run-rate & commitments"},
-        {"question": "Calculate today dairy amount", "tooltip": "Calculates strictly Dairy records"},
-        {"question": "What did I spend today?", "tooltip": "Shows today's total spending"},
-        {"question": "Show pie chart of expenses", "tooltip": "Requests visual chart of all categories"}
+        {"question": "Calculate today dairy amount", "tooltip": "Calculates strictly Dairy records"}
     ]
 
     return {

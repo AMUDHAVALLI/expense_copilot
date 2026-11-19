@@ -29,6 +29,7 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     message: str
+    history: list[dict] = []
 
 @app.get("/api/health")
 def health_check():
@@ -54,12 +55,14 @@ def get_summary(db: Session = Depends(get_db)):
         )
         total_records = db.query(models.Expense).count()
         future_records = db.query(models.FutureExpense).count()
+        memories_count = db.query(models.UserMemory).count()
 
         return {
             "today_total": float(today_sum or 0.0),
             "future_total": float(future_sum or 0.0),
             "total_records": total_records,
             "future_records": future_records,
+            "memories_count": memories_count,
             "database": "Cloud Active"
         }
     except Exception as e:
@@ -68,16 +71,35 @@ def get_summary(db: Session = Depends(get_db)):
             "future_total": 0.0,
             "total_records": 0,
             "future_records": 0,
+            "memories_count": 0,
             "database": "Configuring Cloud Ledger",
             "note": f"Database connecting: {str(e)[:80]}"
         }
+
+@app.get("/api/memories")
+def get_all_memories(db: Session = Depends(get_db)):
+    """Returns all remembered user preferences, budgets, and financial profile notes."""
+    try:
+        memories = db.query(models.UserMemory).order_by(models.UserMemory.id.desc()).all()
+        return [
+            {
+                "id": m.id,
+                "topic": m.topic,
+                "content": m.content,
+                "memory_type": m.memory_type,
+                "created_at": m.created_at.strftime("%Y-%m-%d %H:%M") if m.created_at else ""
+            }
+            for m in memories
+        ]
+    except Exception as e:
+        return []
 
 @app.post("/api/chat")
 def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     try:
-        return agent.process_chat(req.message, db)
+        return agent.process_chat(req.message, db, history=req.history)
     except Exception as e:
         return {
             "reply": f"⚠️ **Connection Issue**: Could not connect to database ({str(e)[:100]}). Please check connection settings.",
