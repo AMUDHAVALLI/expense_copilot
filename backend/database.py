@@ -10,6 +10,7 @@ load_dotenv()
 raw_url = (
     os.getenv("POSTGRES_URL") 
     or os.getenv("DATABASE_URL") 
+    or os.getenv("DATABASE_URL_UNPOOLED")
     or "postgresql://postgres:root@localhost:5432/expense_copilot"
 )
 
