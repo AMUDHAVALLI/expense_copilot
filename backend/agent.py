@@ -162,6 +162,8 @@ def extract_all_expenses(text: str) -> List[Dict[str, Any]]:
     """
     # Clean string
     cleaned = text.strip()
+    if cleaned.lower().startswith(("remember", "forget", "predict", "forecast", "what do", "how much", "calculate")):
+        return []
     # Normalize common connectors
     chunks = re.split(r'[,;\n]|(?:\band\b)', cleaned)
     items = []
@@ -371,11 +373,12 @@ def process_chat(user_message: str, db: Session, history: Optional[List[Dict[str
     except Exception:
         data = heuristic_fallback_parse(user_message)
 
-    # Double-check: ensure NO items were dropped by LLM
-    extracted_fallback = extract_all_expenses(user_message)
-    if extracted_fallback and len(extracted_fallback) > len(data.get("items", [])):
-        data["items"] = extracted_fallback
-        data["intent"] = "ADD_TODAY_EXPENSE"
+    # Double-check: ensure NO items were dropped by LLM (only for expense entry intents)
+    if data.get("intent") in ["ADD_TODAY_EXPENSE", "GENERAL"]:
+        extracted_fallback = extract_all_expenses(user_message)
+        if extracted_fallback and len(extracted_fallback) > len(data.get("items", [])):
+            data["items"] = extracted_fallback
+            data["intent"] = "ADD_TODAY_EXPENSE"
 
     explicit_chart = user_explicitly_wants_chart(user_message) or data.get("wants_chart", False)
     intent = data.get("intent", "GENERAL")

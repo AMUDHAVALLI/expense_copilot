@@ -43,6 +43,10 @@ def health_check():
 @app.get("/api/summary")
 def get_summary(db: Session = Depends(get_db)):
     try:
+        # Clean up any accidentally stored non-expense strings if any
+        db.query(models.Expense).filter(models.Expense.item.ilike("%remember%")).delete()
+        db.commit()
+
         today_sum = (
             db.query(func.coalesce(func.sum(models.Expense.amount), 0.0))
             .filter(models.Expense.expense_date == date.today())
