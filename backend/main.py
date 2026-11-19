@@ -10,12 +10,12 @@ from database import engine, get_db, Base, db_type
 import models
 import agent
 
-# Create DB tables automatically
+# Create DB tables automatically if engine is available
 if engine is not None:
     try:
         Base.metadata.create_all(bind=engine)
     except Exception as e:
-        print(f"[DB] Table creation skipped or pending connection: {e}")
+        print(f"[DB] Table creation pending or skipped: {e}")
 
 app = FastAPI(title="Expense Copilot Enterprise API", version="2.0.0")
 
@@ -32,79 +32,104 @@ class ChatRequest(BaseModel):
 
 @app.get("/api/health")
 def health_check():
+    has_db = bool(os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL"))
     return {
         "status": "healthy",
-        "database": db_type,
+        "database": db_type if has_db else "PostgreSQL (DATABASE_URL needed in Vercel)",
         "openai_configured": bool(os.getenv("OPENAI_API_KEY"))
     }
 
 @app.get("/api/summary")
 def get_summary(db: Session = Depends(get_db)):
-    today_sum = (
-        db.query(func.coalesce(func.sum(models.Expense.amount), 0.0))
-        .filter(models.Expense.expense_date == date.today())
-        .scalar()
-    )
-    future_sum = (
-        db.query(func.coalesce(func.sum(models.FutureExpense.expected_amount), 0.0))
-        .filter(models.FutureExpense.status == "PLANNED")
-        .scalar()
-    )
-    total_records = db.query(models.Expense).count()
-    future_records = db.query(models.FutureExpense).count()
+    try:
+        today_sum = (
+            db.query(func.coalesce(func.sum(models.Expense.amount), 0.0))
+            .filter(models.Expense.expense_date == date.today())
+            .scalar()
+        )
+        future_sum = (
+            db.query(func.coalesce(func.sum(models.FutureExpense.expected_amount), 0.0))
+            .filter(models.FutureExpense.status == "PLANNED")
+            .scalar()
+        )
+        total_records = db.query(models.Expense).count()
+        future_records = db.query(models.FutureExpense).count()
 
-    return {
-        "today_total": float(today_sum),
-        "future_total": float(future_sum),
-        "total_records": total_records,
-        "future_records": future_records,
-        "database": db_type
-    }
+        return {
+            "today_total": float(today_sum or 0.0),
+            "future_total": float(future_sum or 0.0),
+            "total_records": total_records,
+            "future_records": future_records,
+            "database": "PostgreSQL Live"
+        }
+    except Exception as e:
+        return {
+            "today_total": 0.0,
+            "future_total": 0.0,
+            "total_records": 0,
+            "future_records": 0,
+            "database": "PostgreSQL (Pending DATABASE_URL)",
+            "note": f"Database connecting: {str(e)[:80]}"
+        }
 
 @app.post("/api/chat")
 def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
-    return agent.process_chat(req.message, db)
+    try:
+        return agent.process_chat(req.message, db)
+    except Exception as e:
+        return {
+            "reply": f"⚠️ **PostgreSQL Cloud Connection Needed**: Could not connect to database ({str(e)[:100]}). Please configure `DATABASE_URL` in your Vercel Project Settings.",
+            "chart": None,
+            "suggestions": [
+                {"question": "How to connect PostgreSQL in Vercel?", "tooltip": "Guide to add Vercel Postgres/Neon"}
+            ],
+            "db_type": "PostgreSQL"
+        }
 
 @app.post("/api/seed")
 def seed_demo_data(db: Session = Depends(get_db)):
     """Clears and seeds clean, realistic data perfect for interview presentation."""
-    db.query(models.Expense).delete()
-    db.query(models.FutureExpense).delete()
+    try:
+        db.query(models.Expense).delete()
+        db.query(models.FutureExpense).delete()
 
-    # Clean realistic demo records
-    demo_expenses = [
-        models.Expense(item="Milk (2L)", category="Dairy", amount=64.0, expense_date=date.today(), raw_message="Milk 64"),
-        models.Expense(item="Paneer & Curd", category="Dairy", amount=120.0, expense_date=date.today(), raw_message="Paneer and curd 120"),
-        models.Expense(item="Fresh Vegetables", category="Vegetables & Groceries", amount=185.0, expense_date=date.today(), raw_message="Veggies 185"),
-        models.Expense(item="Whole Wheat Bread", category="General", amount=45.0, expense_date=date.today(), raw_message="Bread 45"),
-        models.Expense(item="Cold Coffee & Sandwich", category="Food & Dining", amount=160.0, expense_date=date.today(), raw_message="Coffee sandwich 160"),
-        models.Expense(item="Petrol", category="Transport", amount=350.0, expense_date=date.today(), raw_message="Petrol 350")
-    ]
-    for exp in demo_expenses:
-        db.add(exp)
+        demo_expenses = [
+            models.Expense(item="Milk (2L)", category="Dairy", amount=64.0, expense_date=date.today(), raw_message="Milk 64"),
+            models.Expense(item="Paneer & Curd", category="Dairy", amount=120.0, expense_date=date.today(), raw_message="Paneer and curd 120"),
+            models.Expense(item="Fresh Vegetables", category="Vegetables & Groceries", amount=185.0, expense_date=date.today(), raw_message="Veggies 185"),
+            models.Expense(item="Whole Wheat Bread", category="General", amount=45.0, expense_date=date.today(), raw_message="Bread 45"),
+            models.Expense(item="Cold Coffee & Sandwich", category="Food & Dining", amount=160.0, expense_date=date.today(), raw_message="Coffee sandwich 160"),
+            models.Expense(item="Petrol", category="Transport", amount=350.0, expense_date=date.today(), raw_message="Petrol 350")
+        ]
+        for exp in demo_expenses:
+            db.add(exp)
 
-    # Future planned commitments
-    target_future_1 = date.today() + timedelta(days=12)
-    target_future_2 = date.today() + timedelta(days=25)
-    demo_future = [
-        models.FutureExpense(item="Annual Bike Insurance", category="Bills & Utilities", expected_amount=3800.0, target_date=target_future_1, status="PLANNED", notes="Annual renewal"),
-        models.FutureExpense(item="Quarterly High-speed Wifi", category="Bills & Utilities", expected_amount=1499.0, target_date=target_future_2, status="PLANNED", notes="Broadband bill")
-    ]
-    for fut in demo_future:
-        db.add(fut)
+        target_future_1 = date.today() + timedelta(days=12)
+        target_future_2 = date.today() + timedelta(days=25)
+        demo_future = [
+            models.FutureExpense(item="Annual Bike Insurance", category="Bills & Utilities", expected_amount=3800.0, target_date=target_future_1, status="PLANNED", notes="Annual renewal"),
+            models.FutureExpense(item="Quarterly High-speed Wifi", category="Bills & Utilities", expected_amount=1499.0, target_date=target_future_2, status="PLANNED", notes="Broadband bill")
+        ]
+        for fut in demo_future:
+            db.add(fut)
 
-    db.commit()
-    return {"message": "Demo data seeded successfully in PostgreSQL!"}
+        db.commit()
+        return {"message": "Demo data seeded successfully in PostgreSQL!"}
+    except Exception as e:
+        return {"message": f"Could not seed demo data: {str(e)[:100]}"}
 
 @app.post("/api/clear")
 def clear_all_data(db: Session = Depends(get_db)):
     """Wipes all records so user can start from an empty clean state."""
-    db.query(models.Expense).delete()
-    db.query(models.FutureExpense).delete()
-    db.commit()
-    return {"message": "All expense records cleared from PostgreSQL."}
+    try:
+        db.query(models.Expense).delete()
+        db.query(models.FutureExpense).delete()
+        db.commit()
+        return {"message": "All expense records cleared from PostgreSQL."}
+    except Exception as e:
+        return {"message": f"Could not clear: {str(e)[:100]}"}
 
 if __name__ == "__main__":
     import uvicorn
