@@ -45,6 +45,21 @@ def get_summary(db: Session = Depends(get_db)):
     try:
         # Clean up any accidentally stored non-expense strings if any
         db.query(models.Expense).filter(models.Expense.item.ilike("%remember%")).delete()
+
+        # Repair any previous typo records in DB (e.g. Yesterdat Milk Spent)
+        typo_records = db.query(models.Expense).filter(models.Expense.item.ilike("%yesterdat%")).all()
+        if typo_records:
+            yesterday_date = date.today() - timedelta(days=1)
+            yesterday_dt = datetime.combine(yesterday_date, datetime.now().time())
+            for idx, rec in enumerate(typo_records):
+                if idx == 0:
+                    rec.item = "Milk"
+                    rec.category = "Dairy"
+                    rec.amount = 800.0
+                    rec.expense_date = yesterday_date
+                    rec.created_at = yesterday_dt
+                else:
+                    db.delete(rec)
         db.commit()
 
         today_sum = (

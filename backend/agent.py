@@ -143,27 +143,51 @@ def extract_target_filter(text: str) -> Tuple[Optional[str], Optional[str]]:
 
     return target_category, target_item
 
-def parse_date_from_message(text: str) -> date:
-    """Parses date context from the user message."""
+def parse_date_from_message(text: str) -> Tuple[date, datetime]:
+    """
+    Parses date and timestamp context from user message.
+    Handles 'yesterday' and common typos ('yesterdat', 'yesteday', 'yesturday', 'yestarday', 'yest', etc.),
+    'last month', 'N days ago', and explicit dates.
+    Returns (target_date, target_datetime).
+    """
     t = text.lower()
+    now = datetime.now()
+
+    # Yesterday & typos (yesterdat, yesteday, yesturday, yestarday, yest, etc.)
+    if re.search(r'\b(yest[a-z]*|yesterdat|yesteday|yesturday|yestarday|yestrday)\b', t):
+        yesterday_date = date.today() - timedelta(days=1)
+        yesterday_datetime = now - timedelta(days=1)
+        return yesterday_date, yesterday_datetime
+
+    # N days ago (e.g. "2 days ago")
+    m_days = re.search(r'(\d+)\s+days?\s+(?:ago|back|before)', t)
+    if m_days:
+        days_count = int(m_days.group(1))
+        target_d = date.today() - timedelta(days=days_count)
+        target_dt = now - timedelta(days=days_count)
+        return target_d, target_dt
+
+    # Last month
     if "last month" in t:
-        # 15th of the previous month
         first_of_this_month = date.today().replace(day=1)
         last_month_end = first_of_this_month - timedelta(days=1)
-        return last_month_end.replace(day=15)
-    elif "yesterday" in t:
-        return date.today() - timedelta(days=1)
-    return date.today()
+        target_d = last_month_end.replace(day=min(15, last_month_end.day))
+        target_dt = datetime.combine(target_d, now.time())
+        return target_d, target_dt
+
+    return date.today(), now
 
 def extract_all_expenses(text: str) -> List[Dict[str, Any]]:
     """
     Robust multi-strategy parser that splits lists by comma, 'and', semicolons,
     and extracts EVERY single expense item and amount without skipping any.
     """
-    # Clean string
     cleaned = text.strip()
     if cleaned.lower().startswith(("remember", "forget", "predict", "forecast", "what do", "how much", "calculate")):
         return []
+
+    time_cleanup_pattern = r'\b(last\s+month|this\s+month|today|yesterday|yesterdat|yesteday|yesturday|yestarday|yestrday|yest)\b'
+
     # Normalize common connectors
     chunks = re.split(r'[,;\n]|(?:\band\b)', cleaned)
     items = []
@@ -172,27 +196,32 @@ def extract_all_expenses(text: str) -> List[Dict[str, Any]]:
         c = chunk.strip()
         if not c:
             continue
+
+        # Strip time keywords early
+        c = re.sub(time_cleanup_pattern, '', c, flags=re.I).strip()
         
         # Remove leading boilerplate
-        c = re.sub(r'^(?:last\s+month\s+|this\s+month\s+|today\s+|yesterday\s+)?(?:i\s+)?(?:spent|bought|paid|gave|give|given)\s+', '', c, flags=re.I).strip()
+        c = re.sub(r'^(?:i\s+)?(?:spent|bought|paid|gave|give|given)\s+', '', c, flags=re.I).strip()
         # Remove trailing boilerplate
         c = re.sub(r'\s+(?:i\s+have\s+given|given|i\s+gave)$', '', c, flags=re.I).strip()
 
-        # Strategy 1: (rs|inr)? <amount> (rs|inr)? (for|on|of) <item>
+        # Strategy 1: (rs|inr)? <amount> (rs|inr)? (for|on|of|spent on) <item>
         # e.g. "rs 500 for milk", "500 for milk"
-        m1 = re.search(r'^(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)\s*(?:rs\.?|inr|₹|\$)?\s*(?:for|on|of)\s+([a-zA-Z\s]+)$', c, flags=re.I)
+        m1 = re.search(r'^(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)\s*(?:rs\.?|inr|₹|\$)?\s*(?:for|on|of|spent\s+on)?\s+([a-zA-Z\s]+)$', c, flags=re.I)
         if m1:
-            itm = m1.group(2).strip().title()
+            itm = m1.group(2).strip()
+            itm = re.sub(r'\b(spent|bought|paid|given)\b', '', itm, flags=re.I).strip().title()
             amt = float(m1.group(1))
             if itm and amt > 0:
                 items.append({"item": itm, "category": detect_category(itm), "amount": amt})
                 continue
 
-        # Strategy 2: <item> (?:for|on|of|is|:|-)? (rs|inr)? <amount> (rs|inr)?
-        # e.g. "perosonal loan for 20 rs", "school fess 2500", "supplement for rs6000", "home loan for rs20000", "Groceries 5000", "vegtable for 500", "snack for 300"
-        m2 = re.search(r'^([a-zA-Z\s]+?)\s*(?:for|on|of|is|:|-)?\s*(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)\s*(?:rs\.?|inr|₹|\$)?$', c, flags=re.I)
+        # Strategy 2: <item> (?:spent|bought|paid|for|on|of|is|:|-)? (rs|inr)? <amount> (rs|inr)?
+        # e.g. "yesterdat milk spent 800", "milk spent 800", "milk 800", "perosonal loan for 20 rs"
+        m2 = re.search(r'^([a-zA-Z\s]+?)\s*(?:spent|bought|paid|for|on|of|is|:|-)?\s*(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)\s*(?:rs\.?|inr|₹|\$)?$', c, flags=re.I)
         if m2:
-            itm = m2.group(1).strip().title()
+            itm = m2.group(1).strip()
+            itm = re.sub(r'\b(spent|bought|paid|given)\b', '', itm, flags=re.I).strip().title()
             amt = float(m2.group(2))
             if itm and amt > 0:
                 items.append({"item": itm, "category": detect_category(itm), "amount": amt})
@@ -202,7 +231,7 @@ def extract_all_expenses(text: str) -> List[Dict[str, Any]]:
         dm = re.search(r'(\d+(?:\.\d+)?)', c)
         if dm:
             amt = float(dm.group(1))
-            itm = re.sub(r'\b(rs\.?|inr|for|on|of|spent|paid|bought|today|yesterday|last month|given)\b|[₹\$]', '', c, flags=re.I)
+            itm = re.sub(r'\b(rs\.?|inr|for|on|of|spent|paid|bought|today|yesterday|yesterdat|yesteday|yest|last month|given)\b|[₹\$]', '', c, flags=re.I)
             itm = re.sub(r'\d+(?:\.\d+)?', '', itm).strip().title()
             if itm and amt > 0:
                 items.append({"item": itm, "category": detect_category(itm), "amount": amt})
@@ -315,7 +344,11 @@ def heuristic_fallback_parse(user_message: str) -> Dict[str, Any]:
 
     if is_query:
         target_cat, target_itm = extract_target_filter(msg)
-        time_filt = "FUTURE" if ("future" in msg_lower or "upcoming" in msg_lower) else ("TODAY" if "today" in msg_lower else "ALL_TIME")
+        time_filt = "FUTURE" if ("future" in msg_lower or "upcoming" in msg_lower) else (
+            "YESTERDAY" if re.search(r'\b(yest[a-z]*|yesterdat|yesteday|yesturday|yest)\b', msg_lower) else (
+                "TODAY" if "today" in msg_lower else "ALL_TIME"
+            )
+        )
         chart_type = "bar" if "bar" in msg_lower else ("line" if "line" in msg_lower else "pie")
 
         return {
@@ -331,9 +364,10 @@ def heuristic_fallback_parse(user_message: str) -> Dict[str, Any]:
     # 3. Add Expenses (Extract ALL items)
     items = extract_all_expenses(msg)
     if items:
+        target_d, _ = parse_date_from_message(msg)
         return {
             "intent": "ADD_TODAY_EXPENSE",
-            "expense_date": parse_date_from_message(msg).strftime("%Y-%m-%d"),
+            "expense_date": target_d.strftime("%Y-%m-%d"),
             "wants_chart": wants_chart,
             "recommended_chart": "pie" if wants_chart else None,
             "items": items,
@@ -415,11 +449,14 @@ def process_chat(user_message: str, db: Session, history: Optional[List[Dict[str
         saved_items = []
         total_amount = 0.0
 
-        # Determine target date
-        target_date_val = parse_date_from_message(user_message)
-        if data.get("expense_date"):
+        # Determine target date & timestamp
+        target_date_val, target_datetime_val = parse_date_from_message(user_message)
+        has_explicit_past = bool(re.search(r'\b(yest[a-z]*|yesterdat|yesteday|yesturday|days?\s+ago|last\s+month)\b', user_message.lower()))
+        
+        if not has_explicit_past and data.get("expense_date"):
             try:
                 target_date_val = datetime.strptime(data["expense_date"], "%Y-%m-%d").date()
+                target_datetime_val = datetime.combine(target_date_val, datetime.now().time())
             except Exception:
                 pass
 
@@ -431,6 +468,7 @@ def process_chat(user_message: str, db: Session, history: Optional[List[Dict[str
                     category=itm.get("category", detect_category(itm.get("item", ""))),
                     amount=amount,
                     expense_date=target_date_val,
+                    created_at=target_datetime_val,
                     raw_message=user_message
                 )
                 db.add(exp)
@@ -452,11 +490,18 @@ def process_chat(user_message: str, db: Session, history: Optional[List[Dict[str
                 "data": [{"name": cat, "value": round(float(tot), 2)} for cat, tot in saved_cat_sums]
             }
 
-        date_label = "Last Month" if "last month" in user_message.lower() else target_date_val.strftime('%b %d, %Y')
+        if target_date_val == date.today() - timedelta(days=1):
+            date_label = f"Yesterday, {target_date_val.strftime('%b %d, %Y')}"
+        elif "last month" in user_message.lower():
+            date_label = "Last Month"
+        else:
+            date_label = target_date_val.strftime('%b %d, %Y')
+
         reply = (
             f"✅ Successfully recorded **{len(saved_items)} item(s)** ({date_label}):\n\n"
             + "\n".join(saved_items)
-            + f"\n\n👉 **Total Recorded**: **₹{total_amount:.2f}**"
+            + f"\n\n👉 **Total Recorded**: **₹{total_amount:.2f}**\n"
+            f"📅 **Database Stored Date**: *{target_date_val.strftime('%A, %b %d, %Y')}*"
         )
 
     # -------------------------------------------------------------
@@ -527,8 +572,16 @@ def process_chat(user_message: str, db: Session, history: Optional[List[Dict[str
 
         elif target_category or target_item:
             query = db.query(models.Expense)
-            if time_filter == "TODAY":
+            is_yesterday = time_filter == "YESTERDAY" or bool(re.search(r'\b(yest[a-z]*|yesterdat|yesteday)\b', user_message.lower()))
+            if is_yesterday:
+                yest_d = date.today() - timedelta(days=1)
+                query = query.filter(models.Expense.expense_date == yest_d)
+                time_label = f"yesterday ({yest_d.strftime('%b %d')})"
+            elif time_filter == "TODAY":
                 query = query.filter(models.Expense.expense_date == date.today())
+                time_label = "today"
+            else:
+                time_label = "overall"
             
             conditions = []
             if target_category:
@@ -539,7 +592,6 @@ def process_chat(user_message: str, db: Session, history: Optional[List[Dict[str
             
             records = query.filter(or_(*conditions)).order_by(models.Expense.id.asc()).all()
             category_label = target_category or (target_item.title() if target_item else "Selected")
-            time_label = "today" if time_filter == "TODAY" else "overall"
 
             if records:
                 calculated_total = sum(r.amount for r in records)
