@@ -551,19 +551,19 @@ def process_chat(user_message: str, db: Session, history: Optional[List[Dict[str
                 )
 
                 # Check for remembered budget
-                matched_budget = db.query(models.UserMemory).filter(
-                    models.UserMemory.memory_type == "BUDGET",
-                    models.UserMemory.topic.ilike(f"%{category_label}%")
-                ).first()
-                if not matched_budget:
-                    for word in category_label.split():
-                        if len(word) > 3:
-                            matched_budget = db.query(models.UserMemory).filter(
-                                models.UserMemory.memory_type == "BUDGET",
-                                models.UserMemory.topic.ilike(f"%{word}%")
-                            ).first()
-                            if matched_budget:
-                                break
+                all_budgets = db.query(models.UserMemory).filter(
+                    models.UserMemory.memory_type == "BUDGET"
+                ).all()
+                matched_budget = None
+                cat_l = category_label.lower()
+                for b in all_budgets:
+                    b_top = b.topic.lower()
+                    if any(stem in b_top and stem in cat_l for stem in ["grocer", "veg", "dairy", "milk", "food", "dining", "transport", "loan", "bill", "rent", "fee"]):
+                        matched_budget = b
+                        break
+                    elif any(w in b_top for w in cat_l.split() if len(w) > 3):
+                        matched_budget = b
+                        break
 
                 if matched_budget:
                     budget_nums = re.findall(r'(\d+(?:\.\d+)?)', matched_budget.content)
