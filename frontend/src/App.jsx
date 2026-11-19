@@ -7,6 +7,8 @@ import {
 import DynamicChart from './components/DynamicChart';
 import TooltipPicker from './components/TooltipPicker';
 
+const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+
 export default function App() {
   const [messages, setMessages] = useState([
     {
@@ -48,7 +50,7 @@ export default function App() {
   // Fetch summary stats from PostgreSQL
   const refreshStats = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/summary');
+      const res = await fetch(`${API_BASE}/api/summary`);
       if (res.ok) {
         const data = await res.json();
         setStats(data);
@@ -71,7 +73,7 @@ export default function App() {
   const handleSeedData = async () => {
     setLoading(true);
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/seed', { method: 'POST' });
+      const res = await fetch(`${API_BASE}/api/seed`, { method: 'POST' });
       if (res.ok) {
         await refreshStats();
         setNotification('✅ Realistic demo data loaded into PostgreSQL!');
@@ -123,7 +125,7 @@ export default function App() {
     setLoading(true);
 
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/chat', {
+      const res = await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message })
@@ -148,7 +150,7 @@ export default function App() {
         ...newMessages,
         {
           role: 'assistant',
-          text: `⚠️ **Could not connect to backend server**: ${err.message}.\n\nPlease ensure FastAPI is running on http://127.0.0.1:8000.`,
+          text: `⚠️ **Could not connect to backend server**: ${err.message}.\n\nPlease ensure the backend API and PostgreSQL are running.`,
           chart: null,
           suggestions: [
             { question: "Calculate today dairy amount", tooltip: "Retry querying dairy from PostgreSQL" }

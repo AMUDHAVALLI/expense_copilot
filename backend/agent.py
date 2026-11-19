@@ -10,9 +10,13 @@ from dotenv import load_dotenv
 
 import models
 
+# Load .env from backend directory as well as root
+env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+load_dotenv(env_file)
 load_dotenv()
 
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=5.0)
+_api_key = os.getenv("OPENAI_API_KEY")
+openai_client = OpenAI(api_key=_api_key, timeout=5.0) if _api_key else None
 
 CATEGORIES = [
     "Dairy",
@@ -263,6 +267,8 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
     data = None
 
     try:
+        if not openai_client:
+            raise ValueError("OpenAI client not configured")
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             response_format={"type": "json_object"},

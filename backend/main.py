@@ -11,7 +11,11 @@ import models
 import agent
 
 # Create DB tables automatically
-Base.metadata.create_all(bind=engine)
+if engine is not None:
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        print(f"[DB] Table creation skipped or pending connection: {e}")
 
 app = FastAPI(title="Expense Copilot Enterprise API", version="2.0.0")
 
