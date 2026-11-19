@@ -35,7 +35,7 @@ CATEGORIES = [
 SYSTEM_PROMPT = f"""
 You are an intelligent Expense Copilot AI Assistant.
 Today's local date is: {date.today().strftime('%Y-%m-%d')} ({date.today().strftime('%A')}).
-All data is stored and retrieved strictly from PostgreSQL.
+All data is stored and retrieved strictly from your secure financial ledger.
 
 Known Categories:
 - "Dairy" (Milk, curd, cheese, paneer, butter, ghee, yogurt, etc.)
@@ -260,7 +260,7 @@ def heuristic_fallback_parse(user_message: str) -> Dict[str, Any]:
         "intent": "GENERAL",
         "wants_chart": False,
         "recommended_chart": None,
-        "reply_text": "I can help you track and calculate your expenses from PostgreSQL! Try entering your expenses or asking questions."
+        "reply_text": "I can help you track and calculate your expenses! Try entering your expenses (e.g. 'Milk 45, Bread 35') or asking questions."
     }
 
 def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
@@ -349,7 +349,7 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
 
         date_label = "Last Month" if "last month" in user_message.lower() else target_date_val.strftime('%b %d, %Y')
         reply = (
-            f"✅ Successfully stored all **{len(saved_items)} item(s)** in PostgreSQL ({date_label}):\n\n"
+            f"✅ Successfully recorded **{len(saved_items)} item(s)** ({date_label}):\n\n"
             + "\n".join(saved_items)
             + f"\n\n👉 **Total Recorded**: **₹{total_amount:.2f}**"
         )
@@ -391,7 +391,7 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
                 "data": [{"name": f[0], "value": round(float(f[1]), 2)} for f in all_future]
             }
 
-        reply = f"📅 Stored future commitment in PostgreSQL: **{fut.item}** (₹{expected_amount:.2f}) scheduled for **{target_date.strftime('%b %d, %Y')}**."
+        reply = f"📅 Stored future commitment: **{fut.item}** (₹{expected_amount:.2f}) scheduled for **{target_date.strftime('%b %d, %Y')}**."
 
     # -------------------------------------------------------------
     # 3. QUERY EXPENSES (Zero-Hallucination SQL Computation)
@@ -410,7 +410,7 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
             total_fut = sum(f.expected_amount for f in futs)
             if futs:
                 items_list = "\n".join([f"• **{f.item}**: ₹{f.expected_amount:.2f} (Target: {f.target_date.strftime('%b %d, %Y')})" for f in futs])
-                reply = f"You have **{len(futs)} planned future expense(s)** in PostgreSQL totaling **₹{total_fut:.2f}**:\n{items_list}"
+                reply = f"You have **{len(futs)} planned commitment(s)** totaling **₹{total_fut:.2f}**:\n{items_list}"
                 if explicit_chart:
                     chart_payload = {
                         "type": chart_type if chart_type in ["bar", "pie", "line"] else "bar",
@@ -418,7 +418,7 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
                         "data": [{"name": f.item, "value": round(float(f.expected_amount), 2)} for f in futs]
                     }
             else:
-                reply = "No future expenses scheduled yet in PostgreSQL. Try: *'Plan ₹3000 for Car Insurance next month'*."
+                reply = "No future expenses scheduled yet. Try: *'Plan ₹3000 for Car Insurance next month'*."
 
         elif target_category or target_item:
             query = db.query(models.Expense)
@@ -440,7 +440,7 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
                 calculated_total = sum(r.amount for r in records)
                 item_rows = "\n".join([f"• **{r.item}**: ₹{r.amount:.2f} *(Date: {r.expense_date})*" for r in records])
                 reply = (
-                    f"Calculated {time_label} **{category_label}** amount from PostgreSQL:\n\n"
+                    f"Calculated {time_label} **{category_label}** expenses:\n\n"
                     f"{item_rows}\n\n"
                     f"👉 **Total {category_label} Amount**: **₹{calculated_total:.2f}** (across {len(records)} record(s))."
                 )
@@ -452,7 +452,7 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
                         "data": [{"name": r.item, "value": round(float(r.amount), 2)} for r in records]
                     }
             else:
-                reply = f"No records found in PostgreSQL for **{category_label}** {time_label}."
+                reply = f"No records found for **{category_label}** {time_label}."
 
         elif time_filter == "TODAY":
             today_records = (
@@ -480,7 +480,7 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
                         "data": [{"name": cat, "value": round(float(amt), 2)} for cat, amt in cat_summary]
                     }
             else:
-                reply = "No expenses recorded in PostgreSQL for today yet. Tell me what you bought (e.g. *'Milk 30 and Veggies 70'*)."
+                reply = "No expenses recorded for today yet. Tell me what you bought (e.g. *'Milk 30 and Veggies 70'*)."
 
         else:
             cat_summary = (
@@ -492,7 +492,7 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
 
             if cat_summary:
                 cat_lines = "\n".join([f"• **{cat}**: ₹{float(amt):.2f}" for cat, amt in cat_summary])
-                reply = f"Total tracked spending in PostgreSQL is **₹{total_all:.2f}** across {len(cat_summary)} categories:\n{cat_lines}"
+                reply = f"Total tracked spending is **₹{total_all:.2f}** across {len(cat_summary)} categories:\n{cat_lines}"
                 
                 if explicit_chart:
                     chart_payload = {
@@ -501,14 +501,14 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
                         "data": [{"name": cat, "value": round(float(amt), 2)} for cat, amt in cat_summary]
                     }
             else:
-                reply = "No expense data recorded in PostgreSQL yet. Start by entering today's expenses!"
+                reply = "No expense data recorded yet. Start by entering your expenses!"
 
     else:
-        reply = data.get("reply_text") or "I can help you track and calculate your expenses from PostgreSQL!"
+        reply = data.get("reply_text") or "I can help you track and calculate your expenses!"
 
     # Smart Suggested Questions
     suggestions = [
-        {"question": "Calculate today dairy amount", "tooltip": "Calculates strictly Dairy records from PostgreSQL"},
+        {"question": "Calculate today dairy amount", "tooltip": "Calculates strictly Dairy records"},
         {"question": "What did I spend today?", "tooltip": "Shows today's total spending"},
         {"question": "Show pie chart of expenses", "tooltip": "Requests visual chart of all categories"},
         {"question": "Show future planned expenses", "tooltip": "Lists upcoming scheduled commitments"}
@@ -518,5 +518,5 @@ def process_chat(user_message: str, db: Session) -> Dict[str, Any]:
         "reply": reply,
         "chart": chart_payload,
         "suggestions": suggestions,
-        "db_type": "PostgreSQL"
+        "db_type": "Cloud Active"
     }

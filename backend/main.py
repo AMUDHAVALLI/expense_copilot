@@ -35,7 +35,7 @@ def health_check():
     has_db = bool(os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL"))
     return {
         "status": "healthy",
-        "database": db_type if has_db else "PostgreSQL (DATABASE_URL needed in Vercel)",
+        "database": "Cloud Active" if has_db else "Configuring Cloud Ledger",
         "openai_configured": bool(os.getenv("OPENAI_API_KEY"))
     }
 
@@ -60,7 +60,7 @@ def get_summary(db: Session = Depends(get_db)):
             "future_total": float(future_sum or 0.0),
             "total_records": total_records,
             "future_records": future_records,
-            "database": "PostgreSQL Live"
+            "database": "Cloud Active"
         }
     except Exception as e:
         return {
@@ -68,7 +68,7 @@ def get_summary(db: Session = Depends(get_db)):
             "future_total": 0.0,
             "total_records": 0,
             "future_records": 0,
-            "database": "PostgreSQL (Pending DATABASE_URL)",
+            "database": "Configuring Cloud Ledger",
             "note": f"Database connecting: {str(e)[:80]}"
         }
 
@@ -80,12 +80,12 @@ def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
         return agent.process_chat(req.message, db)
     except Exception as e:
         return {
-            "reply": f"⚠️ **PostgreSQL Cloud Connection Needed**: Could not connect to database ({str(e)[:100]}). Please configure `DATABASE_URL` in your Vercel Project Settings.",
+            "reply": f"⚠️ **Connection Issue**: Could not connect to database ({str(e)[:100]}). Please check connection settings.",
             "chart": None,
             "suggestions": [
-                {"question": "How to connect PostgreSQL in Vercel?", "tooltip": "Guide to add Vercel Postgres/Neon"}
+                {"question": "What did I spend today?", "tooltip": "Query today's total expenses"}
             ],
-            "db_type": "PostgreSQL"
+            "db_type": "Cloud"
         }
 
 @app.post("/api/seed")
@@ -116,7 +116,7 @@ def seed_demo_data(db: Session = Depends(get_db)):
             db.add(fut)
 
         db.commit()
-        return {"message": "Demo data seeded successfully in PostgreSQL!"}
+        return {"message": "Demo data seeded successfully!"}
     except Exception as e:
         return {"message": f"Could not seed demo data: {str(e)[:100]}"}
 
@@ -127,7 +127,7 @@ def clear_all_data(db: Session = Depends(get_db)):
         db.query(models.Expense).delete()
         db.query(models.FutureExpense).delete()
         db.commit()
-        return {"message": "All expense records cleared from PostgreSQL."}
+        return {"message": "All expense records cleared."}
     except Exception as e:
         return {"message": f"Could not clear: {str(e)[:100]}"}
 
