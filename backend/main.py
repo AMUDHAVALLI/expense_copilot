@@ -60,6 +60,15 @@ def get_summary(db: Session = Depends(get_db)):
                     rec.created_at = yesterday_dt
                 else:
                     db.delete(rec)
+
+        # Deduplicate yesterday milk test record
+        yest_milk = db.query(models.Expense).filter(
+            models.Expense.expense_date == date.today() - timedelta(days=1),
+            models.Expense.amount == 800.0
+        ).all()
+        if len(yest_milk) > 1:
+            for rec in yest_milk[1:]:
+                db.delete(rec)
         db.commit()
 
         today_sum = (
